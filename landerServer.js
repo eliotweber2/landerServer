@@ -1,6 +1,6 @@
 const startServer = require('./serverSocketInterface').startServer;
 
-const amountDiv = 50;
+const amountDiv = 300;
 
 const grav = 0.1;
 const thrust = 0.4;
@@ -44,6 +44,7 @@ class Game {
         if (keys.includes('w')) {
             this.lander.fireEngine(amount*thrust);
         }
+        if (keys.includes('r')) {this.reset()}
     }
 
     update(packet) {
@@ -63,7 +64,7 @@ class Game {
         const payload = message.slice(5);
         switch(requestCode) {
             case 'RNFA': this.socket.sendData(JSON.stringify(this.lander.nodes),'LDRP'); this.update(payload); break;
-            case 'INIT': this.initialize(payload);
+            case 'INIT': this.initialize(payload); break;
         }
     }
 
@@ -192,25 +193,6 @@ class Lander {
     }
 
     tip(amount) {
-        /*
-        const cOM = this.nodes.filter(x => x.type == centerOfMass)[0];
-        const lleg = this.nodes.filter(x => x.type == 'lleg')[0];
-        const rleg = this.nodes.filter(x => x.type == 'rleg')[0];
-        if (lleg.isOnGround && !rleg.isOnGround) { 
-            if (lleg.y > rleg.y) {
-                lleg.avel -= (Math.abs(lleg.x - cOM.x) / dist) * amount * tipMult;
-            } else {
-                lleg.avel += (Math.abs(lleg.x - cOM.x) / dist) * amount * tipMult;
-            }
-        }
-        if (!lleg.isOnGround && rleg.isOnGround) {
-            if (lleg.y > rleg.y) {
-                rleg.avel += (Math.abs(cOM.x - rleg.x) / dist) * amount * tipMult;
-            } else {
-                rleg.avel -= (Math.abs(cOM.x - rleg.x) / dist) * amount * tipMult;
-            }
-        }
-        */
         const cOM = this.nodes.filter(x => x.type == centerOfMass)[0];
         const lleg = this.nodes.filter(x => x.type == 'lleg')[0];
         const rleg = this.nodes.filter(x => x.type == 'rleg')[0];
