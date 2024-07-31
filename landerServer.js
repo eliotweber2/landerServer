@@ -23,6 +23,11 @@ const predictMult = 5;
 const angleBounceMult = 0.025;
 const rotateTolerance = nodeSize/2;
 
+const landingSpeedCap = 0.3;
+
+const roundIfUnder = 0.00001;
+
+
 class Game {
     constructor(socket) {
         this.socket = socket;
@@ -50,13 +55,42 @@ class Game {
     update(packet) {
         packet = JSON.parse(packet);
         const deltaTime = parseInt(packet.time) - this.lastTime;
+        if (deltaTime == 0) {return}
         this.lastTime = parseInt(packet.time);
         if (!this.freeze) {
             this.moveLander(deltaTime/amountDiv, packet.keys);
             this.lander.updateLander(deltaTime/amountDiv,this.ground,this.screen);
             this.checkCollision();
+            this.checkWin();
+            this.lander.round();
         }
         
+    }
+
+    checkWin() {
+        //note: isOnGround may be a little buggy
+        const lleg = this.lander.nodes.filter(x => x.type == 'lleg')[0];
+        const rleg = this.lander.nodes.filter(x => x.type == 'rleg')[0];
+        if ((Math.abs(lleg.xvel) + Math.abs(lleg.yvel) == 0) &&
+            (Math.abs(rleg.xvel) + Math.abs(rleg.yvel) == 0) &&
+            (lleg.isOnGround && rleg.isOnGround)) {
+            this.win();
+        }
+    }
+
+    checkLose(node) {
+        if (node.type != 'lleg' && node.type != 'rleg') {this.lose(); return}
+        if ((Math.abs(node.xvel) + Math.abs(node.yvel)) > landingSpeedCap) {this.lose(); return}
+    }
+
+    lose() {
+        console.log('You Lose!');
+        this.reset();
+    }
+
+    win() {
+        console.log('You Win!');
+        this.reset();
     }
 
     handleMessage(message) {
@@ -109,6 +143,7 @@ class Game {
             if (checkIfOutsideMap(node,this.screen)) {this.reset(); return}
             const collisionData = checkNodeCollided(node,this.ground,nodeSize/2);
             if (collisionData.collided) {
+                this.checkLose(node);
                 if (collisionData.node.ticksToNextPossCollision != 0) {collisionData.node.ticksToNextPossCollision--; return}
                 collisionData.node.ticksToNextPossCollision = numTicksBetweenCollide;
                 bounce(collisionData.p1, collisionData.p2, collisionData.node, this.lander);
@@ -220,6 +255,10 @@ class Lander {
         }
     }
 
+    round() {
+        for (let node of this.nodes) {node.round()}
+    }
+
     updateLander(amount,ground,screen) {
         const isOnGround = this.nodes.filter(i => i.isOnGround == true).length > 0;
         for (let node of this.nodes) {
@@ -247,6 +286,12 @@ class LanderNode {
     this.isOnGround = false;
     this.ticksToNextPossCollision = 0;
     }
+
+    round() {
+        this.xvel = Math.abs(this.xvel) < roundIfUnder? 0 : this.xvel;
+        this.yvel = Math.abs(this.yvel) < roundIfUnder? 0 : this.yvel;
+        this.avel = Math.abs(this.avel) < roundIfUnder? 0 : this.avel;
+    }
 }
 
 const checkInterval = function(p1,p2,node,tolerance) {
@@ -272,12 +317,13 @@ const checkCanRotate = function(lander,point,deg,ground,shouldPredict,screen) {
         let collided;
         if (shouldPredict) {
             const noPredict = checkNodeCollided(newNode,ground,rotateTolerance).collided;
+            if (checkIfOutsideMap(updAngle(point,node,deg*predictMult),screen)) {return {canRotate:false,newNodes:null}}
             const didPredict = checkNodeCollided(updAngle(point,node,deg*predictMult),ground,rotateTolerance).collided;
             collided = noPredict || didPredict;
         } else {
             collided = checkNodeCollided(newNode,ground,rotateTolerance).collided;
         }
-        if (collided) {return {canRotate:false, newNodes:null}}
+        if (collided) {node.isOnGround = true; return {canRotate:false, newNodes:null}} else {node.isOnGround = false}
         newNodes.push({node:newNode, type:node.type});
     }}
     return {canRotate:true,newNodes:newNodes}

@@ -39,8 +39,6 @@ INCL: Server is sending the request code length
 RQPC: Client is requesting the desired time between pings and the request code length
 ACKD: Previous command has been received
 
-END CODES:
-
 SERVER CODES:
     LDRP: Server is sending the position of the lander
     GRND: Server is sending the position of the ground
