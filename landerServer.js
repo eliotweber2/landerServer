@@ -6,9 +6,11 @@ const grav = 0.1;
 const thrust = 0.4;
 const turnMult = 0.2;
 
-const numGroundPoints = 12;
+const startNumGroundPoints = 4;
+const maxNumGroundPoints = 12;
 const groundYPosLowerBound = 0;
-const groundYPosUpperBound = 200;
+const startGroundYPosUpperBound = 100;
+const maxGroundYPosUpperBound = 500;
 
 const enableGrav = true;
 
@@ -23,9 +25,16 @@ const predictMult = 5;
 const angleBounceMult = 0.025;
 const rotateTolerance = nodeSize/2;
 
-const landingSpeedCap = 0.3;
+const maxImpactVelocity = 1;
+const landingSpeedCap = 0.001;
 
 const roundIfUnder = 0.00001;
+
+const startFuel = 1500;
+const maxFuel = 500;
+const maxLevel = 3;
+
+const randomizeStart = false;
 
 
 class Game {
@@ -37,6 +46,13 @@ class Game {
         this.freeze = true;
         this.screen = null;
         this.canUnfreeze = true;
+        this.canInput = true;
+        this.isGameScreen = true;
+        this.dispText = false;
+        this.currLevel = 0;
+        this.currFuel = startFuel;
+        this.currNumGroundPoints = startNumGroundPoints;
+        this.currGroundYPosUpperBound = startGroundYPosUpperBound;
     }
 
     moveLander(amount,keys) {
@@ -55,49 +71,79 @@ class Game {
     update(packet) {
         packet = JSON.parse(packet);
         const deltaTime = parseInt(packet.time) - this.lastTime;
-        if (deltaTime == 0) {return}
+        if (deltaTime == 0) {this.sendPacket(); return}
         this.lastTime = parseInt(packet.time);
+        if (packet.shouldContinue && !this.isGameScreen) {this.reset()}
         if (!this.freeze) {
-            this.moveLander(deltaTime/amountDiv, packet.keys);
+            if (this.canInput) {this.moveLander(deltaTime/amountDiv, packet.keys)};
             this.lander.updateLander(deltaTime/amountDiv,this.ground,this.screen);
-            this.checkCollision();
             this.checkWin();
+            this.checkCollision();
             this.lander.round();
         }
-        
+
+        this.sendPacket();
+    }
+
+    sendPacket() {
+        const responsePacket = {};
+        responsePacket.landerPos = this.lander.nodes.map(node => {return {x:node.x, y:node.y}});
+        responsePacket.dispText = this.dispText;
+        responsePacket.isGameScreen = this.isGameScreen;
+        this.socket.sendData(JSON.stringify(responsePacket),'NPKT'); 
     }
 
     checkWin() {
         //note: isOnGround may be a little buggy
         const lleg = this.lander.nodes.filter(x => x.type == 'lleg')[0];
         const rleg = this.lander.nodes.filter(x => x.type == 'rleg')[0];
-        if ((Math.abs(lleg.xvel) + Math.abs(lleg.yvel) == 0) &&
-            (Math.abs(rleg.xvel) + Math.abs(rleg.yvel) == 0) &&
+        if ((Math.abs(lleg.xvel) + Math.abs(lleg.yvel) <= landingSpeedCap) &&
+            (Math.abs(rleg.xvel) + Math.abs(rleg.yvel) <= landingSpeedCap) &&
             (lleg.isOnGround && rleg.isOnGround)) {
             this.win();
         }
     }
 
     checkLose(node) {
-        if (node.type != 'lleg' && node.type != 'rleg') {this.lose(); return}
-        if ((Math.abs(node.xvel) + Math.abs(node.yvel)) > landingSpeedCap) {this.lose(); return}
+        if (node.type != 'lleg' && node.type != 'rleg') {this.lose('collided'); return}
+        if ((Math.abs(node.xvel) + Math.abs(node.yvel)) > maxImpactVelocity) {this.lose('collided'); return}
     }
 
-    lose() {
+    lose(mode) {
+        if (!this.isGameScreen) {return}
         console.log('You Lose!');
-        this.reset();
+        this.canInput = false;
+        this.dispText = 'You Lose the Level!';
+        this.isGameScreen = false;
+        if (this.currLevel != 0) {this.currLevel--}
+        this.updLevel();
+        //this.reset();
     }
 
     win() {
+        if (!this.isGameScreen) {return}
         console.log('You Win!');
-        this.reset();
+        this.canInput = false;
+        this.dispText = 'You Win the Level!';
+        this.isGameScreen = false;
+        this.updLevel();
+        this.currLevel++;
+        if (this.currLevel == maxLevel + 1) {this.dispText = 'You Win the Game!'; this.currLevel = 0; return}
+        //this.reset();
+    }
+
+    updLevel() {
+        const levelFrac = this.currLevel / maxLevel;
+        this.currFuel = Math.floor(startFuel + (maxFuel-startFuel) * levelFrac);
+        this.currNumGroundPoints = Math.floor(startNumGroundPoints + (maxNumGroundPoints-startNumGroundPoints) * levelFrac);
+        this.currGroundYPosUpperBound = Math.floor(startGroundYPosUpperBound + (maxGroundYPosUpperBound-startGroundYPosUpperBound) * levelFrac);
     }
 
     handleMessage(message) {
         const requestCode = message.slice(0,4);
         const payload = message.slice(5);
         switch(requestCode) {
-            case 'RNFA': this.socket.sendData(JSON.stringify(this.lander.nodes),'LDRP'); this.update(payload); break;
+            case 'RNFA': this.update(payload); break;
             case 'INIT': this.initialize(payload); break;
         }
     }
@@ -118,14 +164,14 @@ class Game {
     }
 
     createGround(screen) {
-        const defaultY = screen.height + 100 - (groundYPosUpperBound - groundYPosLowerBound);
+        const defaultY = screen.height + 100 - (this.currGroundYPosUpperBound - groundYPosLowerBound);
         const groundPoints = [{x:0, y:defaultY}];
-        const defaultSpacing = screen.width/numGroundPoints
+        const defaultSpacing = screen.width/this.currNumGroundPoints;
         let prevY = defaultY;
-        for (let ind = 1; ind < numGroundPoints-1; ind++) {
+        for (let ind = 1; ind < this.currNumGroundPoints-1; ind++) {
             if (ind % 2 == 0) {
                 const x = (defaultSpacing*ind) + (1 - Math.random()) * (defaultSpacing / 2);
-                const y = screen.height - (groundYPosLowerBound + random(groundYPosUpperBound));
+                const y = screen.height - (groundYPosLowerBound + random(this.currGroundYPosUpperBound));
                 prevY = y;
                 groundPoints.push({x:x, y:y});
             } else {
@@ -134,13 +180,12 @@ class Game {
             }
         }
         groundPoints.push({x:screen.width, y:prevY});
-
         return setToInt(groundPoints);
     }
 
     checkCollision() {
         for (let node of this.lander.nodes) {
-            if (checkIfOutsideMap(node,this.screen)) {this.reset(); return}
+            if (checkIfOutsideMap(node,this.screen)) {this.lose('leftScreen'); return}
             const collisionData = checkNodeCollided(node,this.ground,nodeSize/2);
             if (collisionData.collided) {
                 this.checkLose(node);
@@ -157,6 +202,8 @@ class Game {
 
     reset() {
         this.freeze = true;
+        this.canInput = true;
+        this.isGameScreen = true;
         this.canUnfreezeTimer = setTimeout(() => this.canUnfreeze = true, 500);
         this.lander = new Lander(initLander);
         this.socket.sendData('', 'RSET');
