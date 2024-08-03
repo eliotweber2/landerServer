@@ -2,20 +2,20 @@ const startServer = require('./serverSocketInterface').startServer;
 
 const amountDiv = 300;
 
-const grav = 0.1;
+const grav = 0.175;
 const thrust = 0.4;
 const turnMult = 0.2;
 
 const startNumGroundPoints = 4;
-const maxNumGroundPoints = 12;
-const groundYPosLowerBound = 0;
+const maxNumGroundPoints = 30;
+const groundYPosLowerBound = -5;
 const startGroundYPosUpperBound = 100;
-const maxGroundYPosUpperBound = 500;
+const maxGroundYPosUpperBound = 300;
 
 const enableGrav = true;
 
 const nodeSize = 15;
-const bounceSpeedMultiplier = 0.2;
+const bounceSpeedMultiplier = 0.1;
 const numTicksBetweenCollide = 5;
 
 const tipMult = 0.1;
@@ -25,16 +25,18 @@ const predictMult = 5;
 const angleBounceMult = 0.025;
 const rotateTolerance = nodeSize/2;
 
-const maxImpactVelocity = 1;
+const maxImpactVelocity = 0.5;
 const landingSpeedCap = 0.001;
 
 const roundIfUnder = 0.00001;
 
-const startFuel = 1500;
-const maxFuel = 500;
-const maxLevel = 3;
+const startFuel = 10;
+const maxFuel = 7;
+const maxLevel = 10;
 
-const randomizeStart = false;
+const randomizeStart = true;
+const randomAngleMult = 0.1;
+const randomSpeedMult = 0.1;
 
 
 class Game {
@@ -51,6 +53,7 @@ class Game {
         this.dispText = false;
         this.currLevel = 0;
         this.currFuel = startFuel;
+        this.currMaxFuel = startFuel;
         this.currNumGroundPoints = startNumGroundPoints;
         this.currGroundYPosUpperBound = startGroundYPosUpperBound;
     }
@@ -63,7 +66,11 @@ class Game {
             this.lander.root.avel -= amount * turnMult;
         }
         if (keys.includes('w')) {
-            this.lander.fireEngine(amount*thrust);
+            if (this.currFuel - amount >= 0) {
+                this.lander.fireEngine(amount*thrust);
+                this.currFuel -= amount;
+            }
+            
         }
         if (keys.includes('r')) {this.reset()}
     }
@@ -90,11 +97,11 @@ class Game {
         responsePacket.landerPos = this.lander.nodes.map(node => {return {x:node.x, y:node.y}});
         responsePacket.dispText = this.dispText;
         responsePacket.isGameScreen = this.isGameScreen;
+        responsePacket.dispInfo = {currFuel:this.currFuel, currMaxFuel:this.currMaxFuel, currLevel:this.currLevel}
         this.socket.sendData(JSON.stringify(responsePacket),'NPKT'); 
     }
 
     checkWin() {
-        //note: isOnGround may be a little buggy
         const lleg = this.lander.nodes.filter(x => x.type == 'lleg')[0];
         const rleg = this.lander.nodes.filter(x => x.type == 'rleg')[0];
         if ((Math.abs(lleg.xvel) + Math.abs(lleg.yvel) <= landingSpeedCap) &&
@@ -105,24 +112,22 @@ class Game {
     }
 
     checkLose(node) {
-        if (node.type != 'lleg' && node.type != 'rleg') {this.lose('collided'); return}
-        if ((Math.abs(node.xvel) + Math.abs(node.yvel)) > maxImpactVelocity) {this.lose('collided'); return}
+        if (!node.isOnGround) {return}
+        if (node.type != 'lleg' && node.type != 'rleg') {this.lose(); return}
+        if ((Math.abs(node.xvel) + Math.abs(node.yvel)) > maxImpactVelocity) {this.lose(); return}
     }
 
-    lose(mode) {
+    lose() {
         if (!this.isGameScreen) {return}
-        console.log('You Lose!');
         this.canInput = false;
         this.dispText = 'You Lose the Level!';
         this.isGameScreen = false;
         if (this.currLevel != 0) {this.currLevel--}
         this.updLevel();
-        //this.reset();
     }
 
     win() {
         if (!this.isGameScreen) {return}
-        console.log('You Win!');
         this.canInput = false;
         this.dispText = 'You Win the Level!';
         this.isGameScreen = false;
@@ -134,7 +139,8 @@ class Game {
 
     updLevel() {
         const levelFrac = this.currLevel / maxLevel;
-        this.currFuel = Math.floor(startFuel + (maxFuel-startFuel) * levelFrac);
+        this.currFuel = Math.floor(startFuel - (startFuel-maxFuel) * levelFrac);
+        this.currMaxFuel = Math.floor(startFuel - (startFuel-maxFuel) * levelFrac);
         this.currNumGroundPoints = Math.floor(startNumGroundPoints + (maxNumGroundPoints-startNumGroundPoints) * levelFrac);
         this.currGroundYPosUpperBound = Math.floor(startGroundYPosUpperBound + (maxGroundYPosUpperBound-startGroundYPosUpperBound) * levelFrac);
     }
@@ -185,10 +191,10 @@ class Game {
 
     checkCollision() {
         for (let node of this.lander.nodes) {
-            if (checkIfOutsideMap(node,this.screen)) {this.lose('leftScreen'); return}
+            if (checkIfOutsideMap(node,this.screen)) {this.lose(); return}
             const collisionData = checkNodeCollided(node,this.ground,nodeSize/2);
+            this.checkLose(node);
             if (collisionData.collided) {
-                this.checkLose(node);
                 if (collisionData.node.ticksToNextPossCollision != 0) {collisionData.node.ticksToNextPossCollision--; return}
                 collisionData.node.ticksToNextPossCollision = numTicksBetweenCollide;
                 bounce(collisionData.p1, collisionData.p2, collisionData.node, this.lander);
@@ -207,6 +213,15 @@ class Game {
         this.canUnfreezeTimer = setTimeout(() => this.canUnfreeze = true, 500);
         this.lander = new Lander(initLander);
         this.socket.sendData('', 'RSET');
+        if (randomizeStart) {
+            this.lander.root.avel += Math.random() * randomAngleMult;
+            const randomXVel = Math.random() * randomSpeedMult;
+            const randomYVel = Math.random() * randomSpeedMult;
+            for (let node of this.lander.nodes) {
+                node.xvel += randomXVel;
+                node.yvel += randomYVel;
+            }
+        }
     }
 
     
